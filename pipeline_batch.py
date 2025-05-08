@@ -19,6 +19,8 @@ import psutil
 import subprocess
 from split_data_multiprocessing import *
 
+from mpi4py import MPI
+
 
 def log_memory_usage():
     # CPU RAM usage
@@ -556,6 +558,7 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                   do_multiprocessing=False, img_id="", update_latents=False, benchmark=None, centroid_type="sg",
                   batch_size=1):
     print("num_images_per_prompt", num_images_per_prompt)
+    print("self guidance device: ", device)
 
     if benchmark is not None or do_multiprocessing:
         save_path = os.path.join("images", save_dir_name)
@@ -571,7 +574,6 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
             generators = [torch.Generator(device=device).manual_seed(seed) for _ in range(batch_size)]
 
         for i in range(num_images_per_prompt):
-            print("batch_prompts", batch_prompts)
 
             batched_relationships = []
             batched_shifts = []
@@ -587,8 +589,7 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                 if shifts and prompt_relationship is not None:
                     prompt_shift = shifts[prompt_relationship]
                 batched_shifts.append(prompt_shift)
-            print("relationships: ", batched_relationships)
-            print("shifts: ", batched_shifts)
+
 
             if do_multiprocessing or benchmark is not None:
                 batched_words = [all_words[p] for p in batch_prompts]
@@ -598,7 +599,6 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                     for prompt in batch_prompts:
                         if word_list[0] in prompt:
                             batched_words.append(word_list)
-            print("words: ", batched_words)
 
             if benchmark is not None or do_multiprocessing:
                 filenames = [f"{prompt}_{i}.png" for prompt in batch_prompts]
@@ -684,6 +684,7 @@ def get_config():
     parser.add_argument("--json_filename", default=None)
     parser.add_argument("--centroid_type", default="sg")
     parser.add_argument("--batch_size", default=1)
+    parser.add_argument("--job_id", default=None)
 
     # t2i-comp-bench
     parser.add_argument("--port", default=2)
@@ -694,21 +695,45 @@ def get_config():
     parser.add_argument("--mode", default="client")
 
     args = parser.parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    node_name = MPI.Get_processor_name()
+
+    # Get the unique node names and assign a unique ID to each node
+    node_names = comm.allgather(node_name)
+    unique_nodes = list(set(node_names))
+    unique_nodes.sort()
+    print(node_name, node_names, unique_nodes)
+    node_id = unique_nodes.index(node_name)
+
+
+    if torch.cuda.is_available():
+        num_gpus_per_node = torch.cuda.device_count()
+        device_id = rank % num_gpus_per_node
+        torch.cuda.set_device(device_id)
+        device = torch.device(f'cuda:{device_id}')
+        print("Rank: {}, Size: {}, Node id: {}, Device: {}".format(rank, size, node_id, device))
+        args.rank = rank
+        args.world_size = size
+    else:
+        device = "cpu"
+
     args.device = device
     return args
 
 
-def run_on_gpu(gpu_id, all_prompts, all_words, attn_greenlist, seeds, num_inference_steps,
+def run_on_gpu(device, all_prompts, all_words, attn_greenlist, seeds, num_inference_steps,
                sg_t_start, sg_t_end, sg_grad_wt, sg_loss_rescale,
                L2_norm=False, shifts=[], num_images_per_prompt=1,
                vocab_spatial=[], loss_num=1, alpha=1, loss_type="relu", margin=0.1,
                self_guidance_mode=False, two_objects=False, plot_centroid=False, weight_combinations=None,
                do_multiprocessing=False, img_id="", update_latents=False, save_dir_name="", centroid_type="sg",
                benchmark=None, batch_size=1):
-    torch.cuda.set_device(gpu_id)
-    device = torch.device(f"cuda:{gpu_id}")
 
+    print("Initializing pipeline on: ", device)
     pipe = init_pipeline(device)
 
     save_aux = False  # True
@@ -735,53 +760,42 @@ def start_multiprocessing(attn_greenlist, json_filename, seeds,
                           loss_num, alpha, loss_type, margin, self_guidance_mode,
                           two_objects, plot_centroid, weight_combinations,
                           do_multiprocessing, img_id, update_latents, benchmark,
-                          save_dir_name, centroid_type, batch_size):
+                          save_dir_name, centroid_type, batch_size, world_size, rank, device):
     # MULTIPROCESSING
     # SHELL
-    num_gpus = torch.cuda.device_count()
-    print(f"Number of GPUs available: {num_gpus}")
 
     # TODO: UNCOMMENT THIS FOR SIEGER
     # Prepare data for multiprocessing
-    split_prompts(num_gpus, benchmark, json_filename)
-    prompts_folder = os.path.join('data_splits', f'{benchmark}', f"multiprocessing_{num_gpus}")
 
-    mp.set_start_method('spawn')
-    processes = []
-    for gpu_id in range(num_gpus):
-        print("THIS IS GPU", gpu_id)
 
-        with open(os.path.join(prompts_folder, f'prompts_part_{gpu_id}.json'), 'r') as f:
-            all_data = json.load(f)
+    data_for_rank = get_prompts_for_rank(world_size, rank, json_filename)
 
-        if benchmark == "visor":
-            prompts = [data['text'] for data in all_data]
-            all_words = {data['text']: [data['obj_1_attributes'][0], data["obj_2_attributes"][0]] for data in all_data}
-        if benchmark == "t2i":
-            prompts = [data['prompt'] for data in all_data]
-            all_words = {data['prompt']: [data['objects'][0], data["objects"][1]] for data in all_data}
-        if benchmark == "geneval":
-            pass
+    if benchmark == "visor":
+        prompts = [data['text'] for data in data_for_rank]
+        all_words = {data['text']: [data['obj_1_attributes'][0], data["obj_2_attributes"][0]] for data in data_for_rank}
+    if benchmark == "t2i":
+        prompts = [data['prompt'] for data in data_for_rank]
+        all_words = {data['prompt']: [data['objects'][0], data["objects"][1]] for data in data_for_rank}
+    if benchmark == "geneval":
+        pass
 
-        p = mp.Process(target=run_on_gpu, args=(gpu_id, prompts, all_words, attn_greenlist, seeds,
-                                                num_inference_steps, sg_t_start, sg_t_end, sg_grad_wt, sg_loss_rescale,
-                                                L2_norm, shifts, num_images_per_prompt, vocab_spatial,
-                                                loss_num, alpha, loss_type, margin, self_guidance_mode,
-                                                two_objects, plot_centroid, weight_combinations,
-                                                do_multiprocessing, img_id, update_latents, save_dir_name,
-                                                centroid_type,
-                                                benchmark, batch_size))
-        p.start()
-        processes.append(p)
+    run_on_gpu(device, prompts, all_words, attn_greenlist, seeds,
+            num_inference_steps, sg_t_start, sg_t_end, sg_grad_wt, sg_loss_rescale,
+            L2_norm, shifts, num_images_per_prompt, vocab_spatial,
+            loss_num, alpha, loss_type, margin, self_guidance_mode,
+            two_objects, plot_centroid, weight_combinations,
+            do_multiprocessing, img_id, update_latents, save_dir_name,
+            centroid_type,
+            benchmark, batch_size)
 
-    for p in processes:
-        p.join()
 
 
 def generate_images(config):
     # log_memory_usage()
 
     model = config.model
+    world_size = config.world_size
+    rank = config.rank
     device = config.device
     L2_norm = config.L2_norm
     loss_num = config.loss_num
@@ -798,6 +812,7 @@ def generate_images(config):
     json_filename = config.json_filename
     centroid_type = config.centroid_type
     batch_size = int(config.batch_size)
+    job_id = config.job_id
 
     print("L2_norm: ", L2_norm)
     print("self_guidance_mode: ", self_guidance_mode)
@@ -814,6 +829,10 @@ def generate_images(config):
     print("json_filename: ", json_filename)
     print("centroid_type: ", centroid_type)
     print("batch_size: ", batch_size)
+    print("world_size: ", world_size)
+    print("rank: ", rank)
+    print("device: ", device)
+    print("job_id: ", job_id)
 
     # MY INTERACTIVE TESTS
     if benchmark is None:
@@ -867,6 +886,8 @@ def generate_images(config):
         num_inference_steps = 64  # 256
         num_images_per_prompt = 1
         save_dir_name = model
+        if job_id:
+            save_dir_name += f"_{job_id}"
         vocab_spatial = ["to the left of", "to the right of", "above", "below"]
         shifts = {
             "to the left of": [(0., 0.5), (1., 0.5)],
@@ -936,6 +957,8 @@ def generate_images(config):
 
     if benchmark is not None:
         save_dir_name = os.path.join(benchmark, f"{model}_{img_id}")
+    if job_id:
+        save_dir_name += f"_{job_id}"
     print("save_dir_name", save_dir_name)
 
     attn_greenlist = [
@@ -974,7 +997,7 @@ def generate_images(config):
             loss_num, alpha, loss_type, margin, self_guidance_mode,
             two_objects, plot_centroid, weight_combinations,
             do_multiprocessing, img_id, update_latents, benchmark,
-            save_dir_name, centroid_type, batch_size)
+            save_dir_name, centroid_type, batch_size, world_size, rank, device)
 
     else:
         pipe = init_pipeline(device)

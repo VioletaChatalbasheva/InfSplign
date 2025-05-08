@@ -1,5 +1,6 @@
 import json
 import os
+import numpy as np
 
 
 def split_prompts(num_gpus, benchmark, json_filename):    
@@ -26,3 +27,15 @@ def split_prompts(num_gpus, benchmark, json_filename):
 
         print(f"Saved {len(part)} items to prompts_part_{i}.json")
         start = end
+
+
+def get_prompts_for_rank(size, rank, json_filename):    
+    with open(os.path.join('json_files', f'{json_filename}.json'), 'r') as f:
+        spatial_prompts = np.array(json.load(f))
+
+    print("len: ", spatial_prompts.shape)
+                   
+    # Split prompts across size and select portion for rank
+    data_chunks = np.array_split(spatial_prompts, size)
+    rank_prompts = data_chunks[rank]
+    return rank_prompts

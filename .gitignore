@@ -5,3 +5,5 @@ images
 objdet_results
 data_splits
 UniDet_eval/experts/expert_weights/*
+outputs
+*.out
