@@ -318,7 +318,7 @@ class SelfGuidanceSDXLPipeline(StableDiffusionXLPipeline):
 
         # 5. Prepare latent variables
         num_channels_latents = self.unet.config.in_channels
-        print("num_images_per_prompt", num_images_per_prompt)
+        # print("num_images_per_prompt", num_images_per_prompt)
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
@@ -329,7 +329,7 @@ class SelfGuidanceSDXLPipeline(StableDiffusionXLPipeline):
             generator,
             latents,
         )
-        print("latents", latents.shape)
+        # print("latents", latents.shape)
 
         # 6. Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
@@ -557,8 +557,6 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                   plot_centroid=False, save_aux=False, two_objects=False, weight_combinations=None,
                   do_multiprocessing=False, img_id="", update_latents=False, benchmark=None, centroid_type="sg",
                   batch_size=1):
-    print("num_images_per_prompt", num_images_per_prompt)
-    print("self guidance device: ", device)
 
     if benchmark is not None or do_multiprocessing:
         save_path = os.path.join("images", save_dir_name)
@@ -568,12 +566,17 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
 
     for batch_start in range(0, len(prompts), batch_size):
         batch_prompts = prompts[batch_start:batch_start + batch_size]
+        # print("batch_prompts", batch_prompts)
 
         if benchmark == "visor":
             seed = seeds[0]
             generators = [torch.Generator(device=device).manual_seed(seed) for _ in range(batch_size)]
 
         for i in range(num_images_per_prompt):
+            if benchmark == "t2i":
+                seed = seeds[i]
+                # print("seed", seed)
+                generators = [torch.Generator(device=device).manual_seed(seed) for _ in range(batch_size)]
 
             batched_relationships = []
             batched_shifts = []
@@ -590,7 +593,6 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                     prompt_shift = shifts[prompt_relationship]
                 batched_shifts.append(prompt_shift)
 
-
             if do_multiprocessing or benchmark is not None:
                 batched_words = [all_words[p] for p in batch_prompts]
             else:
@@ -599,6 +601,7 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                     for prompt in batch_prompts:
                         if word_list[0] in prompt:
                             batched_words.append(word_list)
+
 
             if benchmark is not None or do_multiprocessing:
                 filenames = [f"{prompt}_{i}.png" for prompt in batch_prompts]
@@ -629,7 +632,7 @@ def self_guidance(pipe, device, attn_greenlist, prompts, all_words, seeds, num_i
                     ]
                 })
 
-            print("SELF-GUIDANCE")
+            # print("SELF-GUIDANCE")
             out = pipe(prompt=batch_prompts, generator=generators, sg_grad_wt=sg_grad_wt, sg_edits=sg_edits,
                        num_inference_steps=num_inference_steps, L2_norm=L2_norm, margin=margin,
                        sg_loss_rescale=sg_loss_rescale, debug=False, sg_t_start=sg_t_start, sg_t_end=sg_t_end,
@@ -766,7 +769,6 @@ def start_multiprocessing(attn_greenlist, json_filename, seeds,
 
     # TODO: UNCOMMENT THIS FOR SIEGER
     # Prepare data for multiprocessing
-
 
     data_for_rank = get_prompts_for_rank(world_size, rank, json_filename)
 
