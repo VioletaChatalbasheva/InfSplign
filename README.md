@@ -1,5 +1,5 @@
 # Codebase of InfSplign
-### Official Implementation for ["InfSplign: Inference-Time Spatial Alignment of Text-to-Image Diffusion Models"](https://openreview.net/forum?id=k9SVcrmXL8) 
+### Official Implementation for ["InfSplign: Inference-Time Spatial Alignment of Text-to-Image Diffusion Models"](https://arxiv.org/pdf/2512.17851) 
 #### (Sarah Rastegar, Violeta Chatalbasheva, Sieger Falkena, Anuj Singh, Yanbo Wang, Tejas Gokhale, Hamid Palangi, Hadi Jamali-Rad)
 
 ## Abstract
