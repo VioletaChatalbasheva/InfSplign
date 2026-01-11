@@ -44,7 +44,7 @@ def __init__(self, src_rect, output_size, interp=Image.BILINEAR, fill=0):
 ### Usage
 
 <p align="center">
-    <img src="imgs/InfSplign%20diagram.png" width="40%"  >
+    <img src="imgs/InfSplign%20diagram.png" width="50%"  >
 </p>
 
 To generate the images, run the following command:
